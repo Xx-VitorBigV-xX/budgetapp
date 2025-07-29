@@ -17,7 +17,7 @@ export default function Layout() {
         },
       }}
     > <Stack.Screen
-        name="Index"
+        name="index"
         options={{
         title: "Orçamento",
         headerStyle: { backgroundColor: "#6200ee" },

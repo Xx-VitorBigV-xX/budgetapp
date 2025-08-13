@@ -24,13 +24,9 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 // Importações para PDF
 import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import *as Sharing from 'expo-sharing'; // Corrigido o erro de digitação de 'as'
 import * as FileSystem from 'expo-file-system';
-import { Asset } from 'expo-asset'; // <-- NOVO: Importe Asset
-
-// Importe sua logo aqui! Certifique-se de que o caminho está correto.
-// Substitua 'logo_app.png' pelo nome do seu arquivo de logo
-import appLogo from '../assets/logo_app.png'; // <--- EX: Assuma que sua logo está em assets/logo_app.png
+// import { Asset } from 'expo-asset'; // REMOVIDO: Não é mais necessário para a logo
 
 type Imagem = {
   uri: string;
@@ -57,6 +53,8 @@ export default function NovoOrcamento() {
   const [relatorioHtml, setRelatorioHtml] = useState("");
   const [atividadesHtml, setAtividadesHtml] = useState("");
   const [imagens, setImagens] = useState<Imagem[]>([]);
+  // NOVO ESTADO: Para armazenar as imagens em Base64 para o PDF
+  const [imagensBase64, setImagensBase64] = useState<string[]>([]);
 
   const [hidePrices, setHidePrices] = useState(false);
   const [items, setItems] = useState<ItemPrice[]>([
@@ -72,7 +70,7 @@ export default function NovoOrcamento() {
   const [showTotal, setShowTotal] = useState(true);
 
   const [selectedPaymentMethods, setSelectedPaymentMethods] = useState<string[]>([]);
-  const [logoBase64, setLogoBase64] = useState<string | null>(null); // Estado para a logo em Base64
+  // const [logoBase64, setLogoBase64] = useState<string | null>(null); // REMOVIDO: Não é mais necessário para a logo
 
   const richRelatorio = useRef<RichEditor>(null);
   const richAtividades = useRef<RichEditor>(null);
@@ -87,33 +85,28 @@ export default function NovoOrcamento() {
     { label: "cheque", icon: "cheque" },
   ];
 
-  // MODIFICADO: Efeito para carregar e converter a logo para Base64 ao iniciar
-  useEffect(() => {
-    const loadLogo = async () => {
-      try {
-        // Carrega o asset e garante que ele esteja disponível localmente
-        const asset = Asset.fromModule(appLogo);
-        await asset.downloadAsync(); // Garante que o asset esteja baixado para um URI de arquivo
+  // REMOVIDO: Efeito para carregar e converter a logo para Base64 ao iniciar
+  // useEffect(() => {
+  //   const loadLogo = async () => {
+  //     try {
+  //       const asset = Asset.fromModule(appLogo);
+  //       await asset.downloadAsync();
 
-        // Agora use a URI local do asset para ler o arquivo
-        // Use asset.localUri para assets baixados, ou asset.uri como fallback
-        const base64 = await FileSystem.readAsStringAsync(asset.localUri || asset.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+  //       const base64 = await FileSystem.readAsStringAsync(asset.localUri || asset.uri, {
+  //         encoding: FileSystem.EncodingType.Base64,
+  //       });
 
-        // Assumindo que a logo é um PNG, ajuste o tipo MIME se for JPG, etc.
-        setLogoBase64(`data:image/png;base64,${base64}`);
-      } catch (error) {
-        console.error("Erro ao carregar ou converter logo para Base64:", error);
-        // Opcional: mostrar um alerta ao usuário se a logo não puder ser carregada
-        Alert.alert("Erro", "Não foi possível carregar a logo para o PDF.");
-      }
-    };
+  //       setLogoBase64(`data:image/png;base64,${base64}`);
+  //     } catch (error) {
+  //       console.error("Erro ao carregar ou converter logo para Base64:", error);
+  //       Alert.alert("Erro", "Não foi possível carregar a logo para o PDF.");
+  //     }
+  //   };
 
-    loadLogo();
-  }, []); // Executa apenas uma vez ao montar o componente
+  //   loadLogo();
+  // }, []);
 
-
+  // FUNÇÃO MODIFICADA: para selecionar e converter imagens para Base64
   const selecionarImagens = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -128,14 +121,35 @@ export default function NovoOrcamento() {
     });
 
     if (!result.canceled) {
-      const novasImagens: Imagem[] = result.assets.map((asset) => ({
+      const novasImagensParaPreview: Imagem[] = result.assets.map((asset) => ({
         uri: asset.uri,
         name: asset.fileName || 'imagem.jpg',
         type: asset.type || 'image/jpeg',
       }));
-      setImagens((prev) => [...prev, ...novasImagens]);
+      setImagens((prev) => [...prev, ...novasImagensParaPreview]);
+
+      // Processa cada imagem para Base64 para uso no PDF
+      const base64Promises = result.assets.map(async (asset) => {
+        try {
+          const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          // Retorna a Data URI completa
+          return `data:${asset.type || 'image/jpeg'};base64,${base64}`;
+        } catch (error) {
+          console.error("Erro ao ler imagem para Base64:", error);
+          // Não precisa de Alert aqui, pois pode haver várias imagens
+          return null; // Retorna nulo se houver falha na leitura de uma imagem
+        }
+      });
+
+      const resolvedBase64s = await Promise.all(base64Promises);
+      const validBase64s = resolvedBase64s.filter(Boolean) as string[]; // Filtra URIs nulas
+
+      setImagensBase64((prev) => [...prev, ...validBase64s]); // Adiciona ao estado de Base64
     }
   };
+
 
   const handleAddItem = () => {
     setItems([...items, { id: String(items.length + 1 + Math.random()), name: "", unit: "Un", quantity: "1", price: "0,00" }]);
@@ -220,6 +234,7 @@ export default function NovoOrcamento() {
     }
 
     try {
+      // Usar as URIs originais (para preview e upload ao Firebase)
       const uploadedImageUrls: string[] = [];
       for (const img of imagens) {
         if (img.uri && img.name) {
@@ -241,7 +256,7 @@ export default function NovoOrcamento() {
         },
         relatorioInicial: relatorioHtml,
         descricaoAtividades: atividadesHtml,
-        imagens: uploadedImageUrls,
+        imagens: uploadedImageUrls, // Salvar as URLs do Firebase para referência
         hidePrices: hidePrices,
         items: items.map(item => ({
           name: item.name,
@@ -276,6 +291,7 @@ export default function NovoOrcamento() {
       setRelatorioHtml("");
       setAtividadesHtml("");
       setImagens([]);
+      setImagensBase64([]); // Limpar também o estado Base64
       setHidePrices(false);
       setItems([{ id: "1", name: "", unit: "Un", quantity: "1", price: "0,00" }]);
       setDiscountType("fixed");
@@ -301,20 +317,18 @@ export default function NovoOrcamento() {
       year: 'numeric'
     });
 
-    // Função auxiliar para converter HTML de RichEditor para exibir no PDF
     const cleanHtmlForPdf = (htmlContent: string) => {
-        let cleaned = htmlContent.replace(/style="[^"]*"/g, '');
-        cleaned = cleaned.replace(/<p>/g, '<p style="margin-bottom: 5px;">');
-        cleaned = cleaned.replace(/<li>/g, '<li style="margin-bottom: 3px;">');
-        return cleaned;
+      let cleaned = htmlContent.replace(/style="[^"]*"/g, '');
+      cleaned = cleaned.replace(/<p>/g, '<p style="margin-bottom: 5px;">');
+      cleaned = cleaned.replace(/<li>/g, '<li style="margin-bottom: 3px;">');
+      return cleaned;
     };
 
-    // Adicione a logo no HTML se ela estiver carregada
-    const logoHtml = logoBase64 ? `
-      <div style="text-align: center; margin-bottom: 20px;">
-        <img src="${logoBase64}" style="width: 100px; height: 100px; object-fit: contain;" alt="Logo da Empresa" />
-      </div>
-    ` : '';
+    // const logoHtml = logoBase64 ? `
+    //   <div style="text-align: center; margin-bottom: 20px;">
+    //     <img src="${logoBase64}" style="width: 100px; height: 100px; object-fit: contain;" alt="Logo da Empresa" />
+    //   </div>
+    // ` : ''; // REMOVIDO: Não gerar HTML para a logo
 
     let itemsHtml = '';
     if (!hidePrices) {
@@ -324,7 +338,7 @@ export default function NovoOrcamento() {
             <tr style="background-color:#f2f2f2;">
               <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Item</th>
               ${showQuantityType ? '<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Qtd/Tipo</th>' : ''}
-              ${showUnitPrice ? '<th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Val. Unit.</th>' : ''}
+              ${showUnitPrice ? '<th style="1px solid #ddd; padding: 8px; text-align: right;">Val. Unit.</th>' : ''}
               ${showSubtotal ? '<th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Subtotal</th>' : ''}
             </tr>
           </thead>
@@ -341,23 +355,23 @@ export default function NovoOrcamento() {
         </table>
       `;
     } else {
-        itemsHtml = `
-            <table style="width:100%; border-collapse: collapse; margin-top: 15px;">
-              <thead>
-                <tr style="background-color:#f2f2f2;">
-                  <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Item</th>
-                  <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Detalhes</th>
+      itemsHtml = `
+          <table style="width:100%; border-collapse: collapse; margin-top: 15px;">
+            <thead>
+              <tr style="background-color:#f2f2f2;">
+                <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Item</th>
+                <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Detalhes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map(item => `
+                <tr>
+                  <td style="border: 1px solid #ddd; padding: 8px;">${item.name}</td>
+                  <td style="border: 1px solid #ddd; padding: 8px;">${item.quantity} ${item.unit}</td>
                 </tr>
-              </thead>
-              <tbody>
-                ${items.map(item => `
-                  <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">${item.name}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">${item.quantity} ${item.unit}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+              `).join('')}
+            </tbody>
+          </table>
         `;
     }
 
@@ -378,10 +392,11 @@ export default function NovoOrcamento() {
         </ul>
     ` : '';
 
-    const imagesHtml = imagens.length > 0 ? `
+    // NOVO: Usando imagensBase64 para gerar o HTML das imagens
+    const imagesHtml = imagensBase64.length > 0 ? `
       <h3 style="margin-top: 20px; color: #333;">Imagens Anexadas:</h3>
       <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-        ${imagens.map(img => `<img src="${img.uri}" style="width: 150px; height: 150px; object-fit: cover; margin-right: 10px; margin-bottom: 10px; border-radius: 8px;" />`).join('')}
+        ${imagensBase64.map(base64Uri => `<img src="${base64Uri}" style="width: 150px; height: 150px; object-fit: cover; margin-right: 10px; margin-bottom: 10px; border-radius: 8px;" />`).join('')}
       </div>
     ` : '';
 
@@ -421,7 +436,7 @@ export default function NovoOrcamento() {
           .items-table th:nth-child(4),
           .items-table td:nth-child(3),
           .items-table th:nth-child(3) {
-            text-align: right; /* Alinha valores numericos à direita */
+            text-align: right;
           }
           .total-summary {
             text-align: right;
@@ -434,7 +449,7 @@ export default function NovoOrcamento() {
             border-top: 1px solid #ccc;
             padding-top: 5px;
             font-size: 1.2em;
-            color: #28a745; /* Green for total */
+            color: #28a745;
           }
           .rich-text-content p, .rich-text-content li {
             margin-bottom: 5px;
@@ -458,7 +473,7 @@ export default function NovoOrcamento() {
         </style>
       </head>
       <body>
-        ${logoHtml} <h1>${Titulo}</h1>
+        <h1>${Titulo}</h1>
         <p style="text-align: center; font-style: italic;">Data: ${formattedDate}</p>
 
         <div class="section client-info">
@@ -503,15 +518,15 @@ export default function NovoOrcamento() {
       Alert.alert("Atenção", "Preencha o Título do Orçamento e o Nome do Cliente antes de gerar o PDF.");
       return;
     }
-    // Adição de verificação para logo
-    if (!logoBase64) {
-      Alert.alert("Aguarde", "A logo ainda está sendo carregada. Por favor, tente novamente em alguns segundos.");
-      return;
-    }
+    // REMOVIDO: Verificação de logoBase64
+    // if (!logoBase64) {
+    //   Alert.alert("Aguarde", "A logo ainda está sendo carregada. Por favor, tente novamente em alguns segundos.");
+    //   return;
+    // }
 
     try {
       const html = generateOrcamentoHtml();
-      const { uri } = await Print.printToFileAsync({ html });
+      const { uri } = await Print.printToFileAsync({ html });""
 
       if (Platform.OS === 'ios') {
         await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
@@ -541,14 +556,15 @@ export default function NovoOrcamento() {
           style={styles.input}
           placeholder="Título do orçamento"
           value={Titulo}
+          placeholderTextColor="#888"
           onChangeText={setTitulo}
         />
 
         <Text style={styles.h3}>Dados do Cliente</Text>
-        
+
 
         <TextInput style={styles.input} placeholderTextColor="#888" placeholder="Nome" value={Nome} onChangeText={setNome} />
-        <TextInput style={styles.input} placeholderTextColor="#888" placeholderTextColor="#888",placeholder="Celular" value={Celular} onChangeText={setCelular} keyboardType="phone-pad" />
+        <TextInput style={styles.input} placeholderTextColor="#888" placeholder="Celular" value={Celular} onChangeText={setCelular} keyboardType="phone-pad" />
         <TextInput style={styles.input} placeholderTextColor="#888" placeholder="Email" value={Email} onChangeText={setEmail} keyboardType="email-address" />
         <TextInput style={styles.input} placeholderTextColor="#888" placeholder="CPF/CNPJ" value={cpfCnpj} onChangeText={setCpfCnpj} keyboardType="numeric" />
         <TextInput style={styles.input} placeholderTextColor="#888" placeholder="Endereço" value={Endereco} onChangeText={setEndereco} />
@@ -772,7 +788,6 @@ export default function NovoOrcamento() {
 
         <View style={styles.buttonContainer}>
           <Button title="Salvar Orçamento" onPress={handleSalvar} />
-          {/* NOVO BOTÃO PARA GERAR PDF */}
           <View style={{ marginTop: 10 }}>
             <Button title="Gerar PDF do Orçamento" onPress={createAndSharePdf} color="#007bff" />
           </View>
@@ -785,7 +800,7 @@ export default function NovoOrcamento() {
 const styles = StyleSheet.create({
   scrollContainer: {
     padding: 20,
-    paddingBottom: 200, // Adiciona padding no final para ScrollView
+    paddingBottom: 200,
   },
   h1: {
     fontSize: 28,
@@ -814,6 +829,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     fontSize: 16,
     backgroundColor: "#fff",
+    color: "#333", // Adicionei a cor do texto digitado aqui
   },
   richEditor: {
     minHeight: 150,
@@ -852,93 +868,88 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#eee",
   },
-  buttonContainer: {
-    marginTop: 30,
-    marginBottom: 50,
-  },
-  // Styles for Prices Section
+  // Existing styles for prices, discount, etc. (kept for completeness)
   pricesHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginTop: 25,
     marginBottom: 10,
   },
   hideSwitchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   hideText: {
     marginLeft: 5,
     fontSize: 16,
-    color: "#555",
+    color: '#555',
   },
   itemRow: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 8,
+    marginBottom: 15,
     padding: 10,
-    marginBottom: 10,
-    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 8,
+    backgroundColor: '#fff',
   },
   itemInput: {
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-    paddingVertical: 8,
-    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
     fontSize: 16,
+    marginBottom: 10,
   },
   itemDetailsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
   },
   unitInput: {
-    flex: 0.2,
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 5,
-    padding: 8,
-    marginRight: 10,
-    textAlign: "center",
-  },
-  quantityInput: {
     flex: 0.3,
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: '#ddd',
     borderRadius: 5,
-    padding: 8,
-    textAlign: "center",
+    padding: 10,
+    fontSize: 16,
+    marginRight: 10,
+  },
+  quantityInput: {
+    flex: 0.5,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
+    fontSize: 16,
+    marginRight: 10,
   },
   removeItemButton: {
-    backgroundColor: "#ff4d4d",
-    borderRadius: 20,
+    backgroundColor: '#dc3545',
     width: 30,
     height: 30,
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 10,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   removeItemText: {
-    color: "#fff",
-    fontWeight: "bold",
+    color: '#fff',
+    fontWeight: 'bold',
     fontSize: 16,
   },
   priceContainer: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: '#ddd',
     borderRadius: 5,
-    padding: 8,
-    marginBottom: 8,
+    padding: 10,
   },
   currencySymbol: {
     fontSize: 16,
-    fontWeight: "bold",
+    fontWeight: 'bold',
     marginRight: 5,
-    color: "#555",
+    color: '#333',
   },
   priceInput: {
     flex: 1,
@@ -949,94 +960,99 @@ const styles = StyleSheet.create({
   },
   arrowIcon: {
     fontSize: 18,
-    color: "#555",
+    color: '#007bff',
     paddingVertical: 2,
   },
   totalItemPrice: {
     fontSize: 16,
-    fontWeight: "bold",
-    textAlign: "right",
-    marginTop: 5,
-    color: "#333",
+    fontWeight: 'bold',
+    textAlign: 'right',
+    marginTop: 10,
+    color: '#333',
   },
   addItemButton: {
-    backgroundColor: "#007bff",
-    padding: 12,
+    backgroundColor: '#007bff',
+    padding: 15,
     borderRadius: 8,
-    alignItems: "center",
+    alignItems: 'center',
     marginTop: 10,
   },
   addItemButtonText: {
-    color: "#fff",
+    color: '#fff',
     fontSize: 16,
-    fontWeight: "bold",
+    fontWeight: 'bold',
   },
-  // Styles for Discount Section
   discountHeader: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     marginTop: 25,
     marginBottom: 10,
   },
   helpIcon: {
-    backgroundColor: "#ccc",
-    borderRadius: 15,
-    width: 25,
-    height: 25,
-    justifyContent: "center",
-    alignItems: "center",
     marginLeft: 10,
+    backgroundColor: '#007bff',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   helpIconText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   discountInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 15,
   },
   discountTypeButton: {
-    backgroundColor: "#007bff",
-    padding: 10,
+    backgroundColor: '#f2f2f2',
+    borderWidth: 1,
+    borderColor: '#ccc',
     borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 15,
     marginRight: 10,
   },
   discountTypeButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
   },
   discountValueInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: '#ccc',
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
-    backgroundColor: "#fff",
+    backgroundColor: '#fff',
+    color: '#333',
   },
   summaryRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     paddingVertical: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
   },
   summaryLabel: {
     fontSize: 16,
-    color: "#555",
+    color: '#555',
   },
   summaryValue: {
     fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
+    fontWeight: 'bold',
+    color: '#333',
   },
   totalSummaryRow: {
-    borderTopWidth: 1,
-    borderTopColor: "#ccc",
+    borderTopWidth: 2,
+    borderTopColor: '#007bff',
     paddingTop: 10,
-    marginTop: 5,
+    marginTop: 10,
   },
-  // Styles for Presentar Preços
   priceDisplayToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1045,9 +1061,8 @@ const styles = StyleSheet.create({
   toggleLabel: {
     marginLeft: 10,
     fontSize: 16,
-    color: "#555",
+    color: '#555',
   },
-  // Styles for Payment Methods
   paymentMethodOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1060,19 +1075,17 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 4,
     borderWidth: 2,
-    borderColor: '#ccc',
-    justifyContent: 'center',
+    borderColor: '#007bff',
     alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 10,
   },
   checkboxChecked: {
     backgroundColor: '#007bff',
-    borderColor: '#007bff',
   },
   checkboxCheckmark: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
   },
   paymentMethodIcon: {
     fontSize: 20,
@@ -1081,5 +1094,9 @@ const styles = StyleSheet.create({
   paymentMethodLabel: {
     fontSize: 16,
     color: '#333',
+  },
+  buttonContainer: {
+    marginTop: 30,
+    marginBottom: 50,
   },
 });
